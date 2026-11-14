@@ -13,10 +13,21 @@ from typing import Protocol
 import httpx
 
 from eidolon.billing import bill
-from eidolon.config import DEFAULT_RERANK_MODEL, RerankSettings
-from eidolon.retry import TURN_TIMEOUT, ServiceError, answered, retry_once, transient_status
+from eidolon.config import (
+    DEFAULT_RERANK_MODEL,
+    RerankSettings,
+    rerank_timeout_from_env,
+)
+from eidolon.retry import ServiceError, answered, retry_once, transient_status
 
 RERANK_TIMEOUT = httpx.Timeout(30, connect=10)
+
+
+def rerank_timeout() -> float:
+    """How long one reranking may take: `RERANK_TIMEOUT` seconds, defaulting to the turn
+    budget a cloud reranker answers within (`DEFAULT_RERANK_TIMEOUT`). A local reranker
+    is given more; see `deploy/local-ai/`."""
+    return rerank_timeout_from_env()
 
 
 @dataclass(frozen=True)
@@ -93,13 +104,13 @@ class SiliconFlowReranker:
         model: str,
         base_url: str,
         client: httpx.AsyncClient | None = None,
-        timeout: float = TURN_TIMEOUT,
+        timeout: float | None = None,
     ) -> None:
         self.model = model
         self._url = base_url.rstrip("/") + "/rerank"
         self._api_key = api_key
         self._client = client or httpx.AsyncClient(timeout=RERANK_TIMEOUT)
-        self._timeout = timeout
+        self._timeout = rerank_timeout() if timeout is None else timeout
 
     async def rerank(
         self, query: str, documents: Sequence[str], top_n: int

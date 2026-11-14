@@ -44,6 +44,7 @@ from eidolon.config import (
     CloudflareJudgeSettings,
     JevSettings,
     JudgeSettings,
+    LocalJudgeSettings,
     LLMProtocol,
     LLMSettings,
     ReasoningEffort,
@@ -533,7 +534,11 @@ class _ConfiguredJudge:
 
 
 def judge_key(settings: JudgeSettings) -> str:
-    return settings.api_token if isinstance(settings, CloudflareJudgeSettings) else settings.api_key
+    if isinstance(settings, CloudflareJudgeSettings):
+        return settings.api_token
+    if isinstance(settings, LocalJudgeSettings):
+        return settings.api_key or "local"  # a local judge needs no key
+    return settings.api_key
 
 
 FAKE_JUDGE = JevSettings("fake-judge-key")

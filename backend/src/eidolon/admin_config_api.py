@@ -66,6 +66,11 @@ def _trimmed_if_given(value: str | None) -> str | None:
     return None if value is None else _trimmed(value)
 
 
+def _checked_base_url_if_given(value: str | None) -> str | None:
+    """An optional address: None stays None, a given one must be a web address."""
+    return None if value is None else checked_base_url(value)
+
+
 class LLMInput(BaseModel):
     """A model slot as the admin saves it; without `api_key`, its key stays as it is."""
 
@@ -147,9 +152,12 @@ class JudgeInput(BaseModel):
     region: BailianRegion | None = None
     emotion_timeout: float = Field(gt=0, le=30)
     api_key: str | None = ApiKey
+    base_url: str | None = Field(None, max_length=500)
+    """The local judge's OpenAI-compatible address; None for the cloud providers."""
 
     _trim = field_validator("model")(_trimmed)
     _trim_workspace = field_validator("workspace_id")(_trimmed_if_given)
+    _base_url = field_validator("base_url")(_checked_base_url_if_given)
 
 
 class JudgeThresholdsInput(BaseModel):
@@ -326,7 +334,7 @@ def _change(item: str, body: BaseModel) -> dict[str, Any]:
     and region, a proxy's password and the moments' map and how many comments a day they
     reply to only if given."""
     change = body.model_dump()
-    for field in ("account_id", "workspace_id", "region", "map", "replies_per_day"):
+    for field in ("account_id", "workspace_id", "region", "map", "replies_per_day", "base_url"):
         if change.get(field, "") is None:
             del change[field]
     if change.get("password", "") is None:

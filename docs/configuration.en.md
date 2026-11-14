@@ -13,7 +13,7 @@ This guide explains how to turn on and tune each feature, and how the characters
 > | Voice calls | `FISH_AUDIO_API_KEY`, plus a speech recognition key: `SONIOX_API_KEY` (default), or `STT_PROVIDER=bailian` plus `DASHSCOPE_API_KEY` |
 > | Reading her words aloud | `FISH_AUDIO_API_KEY` |
 > | Story corpus (sync or import) | An embedding key: `SILICONFLOW_API_KEY` (default), or `EMBEDDING_PROVIDER=gemini` plus `GEMINI_API_KEY` |
-> | Retrieval and memory | An embedding key, `SILICONFLOW_API_KEY` (reranking), plus a judge: `JEV_API_KEY` (default), or `JUDGE_PROVIDER=cloudflare` plus `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or `JUDGE_PROVIDER=bailian` plus `BAILIAN_JUDGE_API_KEY` and `BAILIAN_JUDGE_WORKSPACE_ID` |
+> | Retrieval and memory | An embedding key, `SILICONFLOW_API_KEY` (reranking), plus a judge: `JEV_API_KEY` (default), or `JUDGE_PROVIDER=cloudflare` plus `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, or `JUDGE_PROVIDER=bailian` plus `BAILIAN_JUDGE_API_KEY` and `BAILIAN_JUDGE_WORKSPACE_ID`, or `JUDGE_PROVIDER=local` (a local model, no key needed) |
 > | Affinity and gifts | A judge (the switch is on by default) |
 > | Photos | A judge, plus an image generation key: `NOVELAI_API_KEY` |
 > | Schedules | Nothing (the switch is on by default) |
@@ -324,16 +324,17 @@ Once the embedding key and `SILICONFLOW_API_KEY` (reranking) are set and a judge
 
 Every turn, the judge decides whether to look anything up and what, and, with [affinity](#affinity-and-gifts) on, how the line changes her affinity. In calls, it also judges the emotion of each segment of a reply. Choose one provider with `JUDGE_PROVIDER`; if it errs, the other is never used in its place.
 
-| | Jev (default) | Clef-flash | Clef | Model Studio decision model |
-|---|---|---|---|---|
-| Settings | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | Additionally `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` |
-| Price (per million input tokens; output is free) | $0.042 | $0.09 | $0.24 | Free for a limited time in preview |
-| Free allocation per day | None | About 2,000 judgements (about 860 with affinity on) | About 750 judgements (about 320 with affinity on) | Not published |
+| | Jev (default) | Clef-flash | Clef | Model Studio decision model | Local model |
+|---|---|---|---|---|---|
+| Settings | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | Additionally `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` | `JUDGE_PROVIDER=local` |
+| Price (per million input tokens; output is free) | $0.042 | $0.09 | $0.24 | Free for a limited time in preview | Electricity only |
+| Free allocation per day | None | About 2,000 judgements (about 860 with affinity on) | About 750 judgements (about 320 with affinity on) | Not published | Unlimited |
 
 - **Jev**: Called through [OpenRouter](https://openrouter.ai/typesafe/jev-1.13) by default; `JEV_API_KEY` takes an OpenRouter key. You can also point `JEV_BASE_URL` at Vercel AI Gateway or TypeSafe directly; see `.env.example` for how.
 - **Clef and Clef-flash**: Cloudflare's judge models, called directly on Workers AI. Clef judges retrieval more accurately (94% against 87% on the repo's eval set), but costs nearly 3× as much. A public deployment should be on Workers Paid: once the free allocation is used up, every judgement fails for the rest of the day. How to get the credentials is in `.env.example`.
 - **Model Studio decision model**: Alibaba Cloud Model Studio's `decision-model-preview`, called at the workspace's own endpoint, with the lowest latency. It judges retrieval about as well as Clef-flash (89%), but rates affinity too high and cannot tell talk of photos from asking for one, so it suits only deployments with [affinity](#affinity-and-gifts) off; with affinity on, use Jev. How to get the workspace ID and key is in `.env.example`.
-- **Thresholds**: The judgement thresholds are set per model in code, determined with `eidolon eval judge` on the repo's eval set (see "校准判断模型阈值" in [`deploy.md`](deploy.md) (Chinese)).
+- **Local model**: An OpenAI-compatible Chat Completions server running on the same machine (for example llama-server), pointed to with `LOCAL_JUDGE_BASE_URL` and `LOCAL_JUDGE_MODEL` and needing no API key. It keeps retrieval, affinity and emotion judgements on the machine. It is slower than the cloud, so relax the per-request timeout with `JUDGE_TIMEOUT` (5 seconds by default; about 30 is recommended for a local 4B model). The model name must match a preset of the server; setup and measured latencies are in [`deploy/local-ai/README.md`](../deploy/local-ai/README.md). Speech synthesis and recognition still go to the cloud; see the "Boundary" section there.
+- **Thresholds**: The judgement thresholds are set per model in code, determined with `eidolon eval judge` on the repo's eval set (see "校准判断模型阈值" in [`deploy.md`](deploy.md) (Chinese)). The local model has no thresholds of its own and falls back to Jev's family, with a warning at startup.
 
 ```mermaid
 flowchart LR
@@ -345,7 +346,7 @@ flowchart LR
 ```
 
 - **No retrieval**: Small talk triggers no retrieval and adds no latency. If the judge errs, retrieval runs anyway.
-- **Needs references**: The episodes she appears in, her character facts, and the work facts all characters share (one entry per song, release and live day) are searched together, reranked with Qwen3-Reranker (`RERANK_MODEL`), and up to 5 sufficiently relevant results go into the prompt. The thresholds are calibrated per reranker model; you can also set them by hand with `RERANK_MIN_RELEVANCE` and `RERANK_MEMORY_MIN_RELEVANCE`.
+- **Needs references**: The episodes she appears in, her character facts, and the work facts all characters share (one entry per song, release and live day) are searched together, reranked with Qwen3-Reranker (`RERANK_MODEL`), and up to 5 sufficiently relevant results go into the prompt. The thresholds are calibrated per reranker model; you can also set them by hand with `RERANK_MIN_RELEVANCE` and `RERANK_MEMORY_MIN_RELEVANCE`. Reranking is given 3 seconds by default (`RERANK_TIMEOUT`, the budget of one conversation turn); when reranking runs locally, 36 passages of a story's length take 4 to 5 seconds on a GPU like this, so raise it to about 10 with `RERANK_TIMEOUT`, see [`deploy/local-ai/README.md`](../deploy/local-ai/README.md).
 - **Story recall**: For questions like "what happened that time…?", the line itself is used to search the story right away, and related lives and releases are looked up too. If the story corpus has no record of how something went, she is told that this doesn't mean it never happened, so she neither makes it up nor denies it. On other turns, the chat model can call the `recall_story` tool itself, at most one round per line.
 - **Reference files**: Character facts are the Markdown file `facts` points to, one entry per heading. Work facts are generated from `characters/world.json`. Both are embedded on the first search, and afterwards only changed entries are re-embedded; after editing, just restart the backend.
 

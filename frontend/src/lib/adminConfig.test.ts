@@ -251,6 +251,14 @@ describe("formOf and changeOf", () => {
     expect(changeOf(ITEM_SPECS.judge, { ...bailian, workspace_id: "", region: "" }, true)).toEqual({
       change: { provider: "bailian", model: "decision-model-preview", emotion_timeout: 1.5 },
     });
+    // 本地判断模型：不发 key，但要能发 OpenAI 兼容服务的地址（deploy/local-ai/）。
+    const local = { ...judge, provider: "local", model: "local-judge", emotion_timeout: "1.5" };
+    expect(changeOf(ITEM_SPECS.judge, { ...local, base_url: " http://127.0.0.1:8094/v1 ", api_key: "" }, true)).toEqual({
+      change: { provider: "local", model: "local-judge", base_url: "http://127.0.0.1:8094/v1", emotion_timeout: 1.5 },
+    });
+    expect(changeOf(ITEM_SPECS.judge, { ...local, base_url: "", api_key: "" }, true)).toEqual({
+      change: { provider: "local", model: "local-judge", emotion_timeout: 1.5 },
+    });
   });
 });
 

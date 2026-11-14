@@ -13,7 +13,7 @@
 > | 音声通話 | `FISH_AUDIO_API_KEY` と音声認識のキー：`SONIOX_API_KEY`（デフォルト）、または `STT_PROVIDER=bailian` と `DASHSCOPE_API_KEY` |
 > | 彼女のセリフの読み上げ | `FISH_AUDIO_API_KEY` |
 > | シナリオライブラリ（同期または取り込み） | ベクトル化のキー：`SILICONFLOW_API_KEY`（デフォルト）、または `EMBEDDING_PROVIDER=gemini` と `GEMINI_API_KEY` |
-> | 検索とメモリー | ベクトル化のキー、`SILICONFLOW_API_KEY`（並べ替え用）、判断モデル：`JEV_API_KEY`（デフォルト）、または `JUDGE_PROVIDER=cloudflare` と `CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`、または `JUDGE_PROVIDER=bailian` と `BAILIAN_JUDGE_API_KEY`・`BAILIAN_JUDGE_WORKSPACE_ID` |
+> | 検索とメモリー | ベクトル化のキー、`SILICONFLOW_API_KEY`（並べ替え用）、判断モデル：`JEV_API_KEY`（デフォルト）、または `JUDGE_PROVIDER=cloudflare` と `CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`、または `JUDGE_PROVIDER=bailian` と `BAILIAN_JUDGE_API_KEY`・`BAILIAN_JUDGE_WORKSPACE_ID`、または `JUDGE_PROVIDER=local`（ローカルモデル、キー不要） |
 > | 好感度とプレゼント | 判断モデル（スイッチは初期状態でオン） |
 > | 写真 | 判断モデルと画像生成のキー：`NOVELAI_API_KEY` |
 > | スケジュール | なし（スイッチは初期状態でオン） |
@@ -324,16 +324,17 @@ docker compose exec backend eidolon reembed
 
 判断モデルはターンごとに検索が必要か、何を検索するかを判断し、[好感度](#好感度とプレゼント)がオンならその発言で好感度がどう変わるかも判断します。通話中は返事のひとまとまりごとの感情も判断します。`JUDGE_PROVIDER` で 1 社を選び、エラーになってももう一方に切り替えることはしません。
 
-| | Jev（デフォルト） | Clef-flash | Clef | Model Studio の判断モデル |
-|---|---|---|---|---|
-| 設定 | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | さらに `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` |
-| 料金（入力 100 万トークンあたり、出力は無料） | $0.042 | $0.09 | $0.24 | プレビュー版は期間限定で無料 |
-| 1 日の無料枠 | なし | 約 2,000 回の判断（好感度がオンなら約 860 回） | 約 750 回の判断（好感度がオンなら約 320 回） | 未公表 |
+| | Jev（デフォルト） | Clef-flash | Clef | Model Studio の判断モデル | ローカルモデル |
+|---|---|---|---|---|---|
+| 設定 | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | さらに `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` | `JUDGE_PROVIDER=local` |
+| 料金（入力 100 万トークンあたり、出力は無料） | $0.042 | $0.09 | $0.24 | プレビュー版は期間限定で無料 | 電気代のみ |
+| 1 日の無料枠 | なし | 約 2,000 回の判断（好感度がオンなら約 860 回） | 約 750 回の判断（好感度がオンなら約 320 回） | 未公表 | 無制限 |
 
 - **Jev**：デフォルトでは [OpenRouter](https://openrouter.ai/typesafe/jev-1.13) 経由で呼び出し、`JEV_API_KEY` には OpenRouter のキーを設定します。`JEV_BASE_URL` を Vercel AI Gateway や TypeSafe への直接接続に変えることもでき、書き方は `.env.example` にあります。
 - **Clef と Clef-flash**：Cloudflare の判断モデルで、Workers AI に直接つなぎます。Clef は検索の判断がより正確です（リポジトリの評価用データセットで 94% 対 87%）が、料金は 3 倍近くです。公開デプロイでは Workers Paid にしてください。無料枠を使い切ると、その日の判断はすべて失敗扱いになります。認証情報の取得方法は `.env.example` にあります。
 - **Model Studio の判断モデル**：Alibaba Cloud Model Studio の `decision-model-preview` で、ワークスペース専用のエンドポイントで呼び出し、遅延がいちばん小さいです。検索の判断は Clef-flash と同程度（89%）ですが、好感度を高めに判断し、写真の話と写真をねだる発言を区別できないため、[好感度](#好感度とプレゼント)をオフにしたデプロイにだけ向いています。好感度がオンなら Jev を使ってください。ワークスペース ID とキーの取得方法は `.env.example` にあります。
-- **しきい値**：判断のしきい値はモデルごとにコードで決めていて、リポジトリの評価用データセットに対して `eidolon eval judge` で定めたものです（[`deploy.md`](deploy.md)（中国語）の「校准判断模型阈值」を参照）。
+- **ローカルモデル**：同じマシンで動かす OpenAI 互換の Chat Completions サーバー（例：llama-server）で、`LOCAL_JUDGE_BASE_URL` と `LOCAL_JUDGE_MODEL` で指定し、API キーは不要です。検索・好感度・感情の判断をすべて手元に残せます。クラウドより遅いため、`JUDGE_TIMEOUT` で 1 回の判断のタイムアウトを延ばします（デフォルト 5 秒、ローカル 4B モデルなら 30 秒前後を推奨）。モデル名はサーバーのプリセット名と一致させる必要があります。起動方法と実測値は [`deploy/local-ai/README.md`](../deploy/local-ai/README.md) にあります。音声合成と音声認識は引き続きクラウドが必要で、同ドキュメントの「境界」を参照してください。
+- **しきい値**：判断のしきい値はモデルごとにコードで決めていて、リポジトリの評価用データセットに対して `eidolon eval judge` で定めたものです（[`deploy.md`](deploy.md)（中国語）の「校准判断模型阈值」を参照）。ローカルモデルには専用のしきい値がなく Jev 系にフォールバックし、起動時に警告が出ます。
 
 ```mermaid
 flowchart LR
@@ -345,7 +346,7 @@ flowchart LR
 ```
 
 - **検索しない**：雑談では検索せず、遅延も増えません。判断モデルがエラーの場合は通常どおり検索します。
-- **資料が必要**：彼女が登場したコミュ、彼女のキャラクター資料、全アイドル共通の作品資料（楽曲・CD・ライブの公演日ごとに 1 項目）を同時に検索し、Qwen3-Reranker（`RERANK_MODEL`）で並べ替え、関連度が十分高いものを最大 5 件プロンプトに入れます。しきい値は並べ替えモデルごとに調整済みで、`RERANK_MIN_RELEVANCE`・`RERANK_MEMORY_MIN_RELEVANCE` で手動設定もできます。
+- **資料が必要**：彼女が登場したコミュ、彼女のキャラクター資料、全アイドル共通の作品資料（楽曲・CD・ライブの公演日ごとに 1 項目）を同時に検索し、Qwen3-Reranker（`RERANK_MODEL`）で並べ替え、関連度が十分高いものを最大 5 件プロンプトに入れます。しきい値は並べ替えモデルごとに調整済みで、`RERANK_MIN_RELEVANCE`・`RERANK_MEMORY_MIN_RELEVANCE` で手動設定もできます。並べ替えのタイムアウトは既定で 3 秒（`RERANK_TIMEOUT`、1 回の会話ターンの予算と同じ）です。ローカルで並べ替える場合、コミュ 1 段落分の長さの候補 36 件はこのクラスの GPU で 4〜5 秒かかるため、`RERANK_TIMEOUT` で 10 秒前後に延ばしてください。[`deploy/local-ai/README.md`](../deploy/local-ai/README.md) を参照。
 - **コミュを振り返る**：「あのときって……」と聞かれたときは、その発言でそのままコミュを検索し、関連するライブと CD も調べます。シナリオライブラリにその経緯がない場合は、それがなかったことを意味するわけではないと彼女に伝え、作り話も否定もさせません。それ以外のターンでも、会話モデルは自分で `recall_story` ツールを呼べます。ひとことにつき最大 1 往復です。
 - **資料ファイル**：キャラクター資料は `facts` が指す Markdown で、見出しごとに 1 項目です。作品資料は `characters/world.json` から作られます。どちらも初めての検索時にベクトル化され、以降は変更のあった項目だけを計算し直すので、編集後はバックエンドを再起動するだけで反映されます。
 

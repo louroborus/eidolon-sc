@@ -269,7 +269,7 @@ def checks_for(settings: Settings) -> dict[ServiceName, Check]:
     """The check of each service `settings` configure, but image generation's."""
     from eidolon.call import SpeechServices
     from eidolon.embedding import EMBEDDING_TIMEOUT, open_embedder
-    from eidolon.judge import JUDGE_TIMEOUT, open_judge, try_judge_model
+    from eidolon.judge import judge_timeout, open_judge, try_judge_model
     from eidolon.llm.providers import LLM_TIMEOUT, check_chat_models, open_chat_models, open_llm
     from eidolon.rerank import RERANK_TIMEOUT, SiliconFlowReranker
     from eidolon.service_status import embed_a_word, first_word, rerank_a_word
@@ -296,7 +296,7 @@ def checks_for(settings: Settings) -> dict[ServiceName, Check]:
     if (judge_settings := settings.judge) is not None:
 
         async def judge(proxy: str | None) -> None:
-            async with open_client(proxy, JUDGE_TIMEOUT) as client:
+            async with open_client(proxy, judge_timeout()) as client:
                 await try_judge_model(open_judge(judge_settings, client))
 
         checks["judge"] = judge

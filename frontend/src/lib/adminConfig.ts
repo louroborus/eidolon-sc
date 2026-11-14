@@ -312,16 +312,18 @@ export const ITEM_SPECS: Record<ItemName, ItemSpec> = {
     tried: true,
   },
   judge: {
-    rows: ["provider", "model", "account_id", "workspace_id", "region", "emotion_timeout", "api_key"],
+    rows: ["provider", "model", "account_id", "workspace_id", "region", "emotion_timeout", "api_key", "base_url"],
     secrets: ["api_key"],
     form: [
-      { name: "provider", kind: "select", options: ["jev", "cloudflare", "bailian"] },
+      { name: "provider", kind: "select", options: ["jev", "cloudflare", "bailian", "local"] },
       { name: "model", kind: "text" },
       { name: "account_id", kind: "optionalText" },
       { name: "workspace_id", kind: "optionalText" },
       { name: "region", kind: "select", options: BAILIAN_REGIONS },
       { name: "emotion_timeout", kind: "seconds" },
       { name: "api_key", kind: "secret" },
+      // 本地判断模型：OpenAI 兼容服务地址（deploy/local-ai/），留空沿用 .env / 默认地址
+      { name: "base_url", kind: "optionalText" },
     ],
     tried: true,
   },

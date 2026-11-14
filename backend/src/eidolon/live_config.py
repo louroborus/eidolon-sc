@@ -76,10 +76,12 @@ from eidolon.config import (
     FISH_AUDIO_MODELS,
     BailianJudgeSettings,
     CloudflareJudgeSettings,
+    DEFAULT_LOCAL_JUDGE_BASE_URL,
     GptImageSettings,
     ImageSettings,
     JevSettings,
     JudgeSettings,
+    LocalJudgeSettings,
     EXEMPTING_SERVICES,
     LLMProtocol,
     LLMSettings,
@@ -568,9 +570,12 @@ class _GptImage(_Item):
 
 class _Judge(_Item):
     name = JUDGE
-    fields = ("provider", "api_key", "model", "account_id", "workspace_id", "region", "emotion_timeout")
+    fields = (
+        "provider", "api_key", "model", "account_id", "workspace_id", "region",
+        "emotion_timeout", "base_url",
+    )
     secrets = frozenset({"api_key"})
-    _per_service = ("api_key", "account_id", "workspace_id", "region")
+    _per_service = ("api_key", "account_id", "workspace_id", "region", "base_url")
     """What each service has of its own, and another cannot use."""
     unavailable_reason = (
         ".env 里没有配置判断模型，检索、记忆和通话中的情绪判断在启动时就关掉了；"
@@ -591,6 +596,9 @@ class _Judge(_Item):
         if isinstance(judge, BailianJudgeSettings):
             return values | {"provider": "bailian", "api_key": judge.api_key, "model": judge.model,
                              "workspace_id": judge.workspace_id, "region": judge.region}
+        if isinstance(judge, LocalJudgeSettings):
+            return values | {"provider": "local", "model": judge.model,
+                             "base_url": judge.base_url, "api_key": judge.api_key}
         assert judge is not None
         return values | {"provider": "jev", "api_key": judge.api_key, "model": judge.model}
 
@@ -603,12 +611,17 @@ class _Judge(_Item):
             for field in self._per_service:
                 if field not in change:
                     values[field] = env[field] if env["provider"] == provider else None
-            if "api_key" not in change and values["api_key"] is None:
+            # The local judge needs no key; every other provider does.
+            if provider != "local" and "api_key" not in change and values["api_key"] is None:
                 raise ConfigInvalid("换了判断模型的服务，需要填写它的 key")
         if provider != "cloudflare":
             values["account_id"] = None
         if provider != "bailian":
             values["workspace_id"] = values["region"] = None
+        if provider == "local":
+            values["base_url"] = values["base_url"] or DEFAULT_LOCAL_JUDGE_BASE_URL
+        else:
+            values["base_url"] = None
         if provider == "cloudflare":
             if not values["account_id"]:
                 raise ConfigInvalid("Cloudflare 需要填写账号 ID（account_id）")
@@ -1626,6 +1639,11 @@ class LiveConfig:
         if values["provider"] == "bailian":
             return BailianJudgeSettings(
                 values["api_key"], values["workspace_id"], values["region"], values["model"]
+            )
+        if values["provider"] == "local":
+            return LocalJudgeSettings(
+                values["model"], values["base_url"] or DEFAULT_LOCAL_JUDGE_BASE_URL,
+                values["api_key"],
             )
         env = self.settings.judge
         base_url = env.base_url if isinstance(env, JevSettings) else DEFAULT_JEV_BASE_URL

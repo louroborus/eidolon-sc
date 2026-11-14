@@ -285,6 +285,7 @@ function fieldHint(name: ItemName, spec: FieldSpec, keysEditable: boolean, item?
   if (spec.kind === "maxTokens") return t.maxTokensHint;
   if (spec.kind === "probability") return t.formHints.probability;
   if (name === "judge" && spec.name === "model") return t.formHints.judge_model;
+  if (name === "judge" && spec.name === "base_url") return t.formHints.judge_base_url;
   if (name === "image" && spec.name === "base_url") return t.formHints.image_base_url;
   return t.formHints[spec.name];
 }

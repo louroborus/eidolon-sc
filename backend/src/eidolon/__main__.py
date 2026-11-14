@@ -251,10 +251,10 @@ async def _find_dashscope_region(settings: Settings) -> Settings:
 
 async def _check_judge(settings: Settings) -> None:
     """Tries Cloudflare's credentials, through the proxy or direct, as `.env` has it."""
-    from eidolon.judge import JUDGE_TIMEOUT, check_judge
+    from eidolon.judge import check_judge, judge_timeout
     from eidolon.proxy import open_client
 
-    async with open_client(settings.proxy.proxy_for("judge"), JUDGE_TIMEOUT) as client:
+    async with open_client(settings.proxy.proxy_for("judge"), judge_timeout()) as client:
         await check_judge(settings.judge, client)
 
 

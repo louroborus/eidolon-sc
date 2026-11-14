@@ -25,6 +25,8 @@ from eidolon.config import (
     CloudflareJudgeSettings,
     EmotionSettings,
     JudgeSettings,
+    LocalJudgeSettings,
+    judge_timeout_from_env,
 )
 from eidolon.store import Message
 
@@ -195,6 +197,93 @@ class JudgeReply:
     input_tokens: int | None
 
 
+_LOCAL_SYSTEM = (
+    "你是一个角色扮演对话里的判断模型。用户会给你对话状态和若干个打分问题，"
+    "你只输出一个 JSON 对象，不要解释，不要输出任何 JSON 之外的东西。"
+)
+_LOCAL_MAX_TOKENS = 700
+"""The local judge is asked by strict JSON Schema, as the validated `judge_shim.py` in
+`deploy/local-ai/` did: the schema is built from each question's `type` (`noul`, `score`,
+`choice`), and the model's answer is parsed straight back into System One's `answers`."""
+
+
+def _probabilities_schema(names: list[str]) -> dict[str, Any]:
+    """A strict `{"probabilities": {name: number}}` schema for `score`/`choice`."""
+    properties = {name: {"type": "number"} for name in names}
+    return {
+        "type": "object",
+        "properties": {"probabilities": {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }},
+        "required": ["probabilities"],
+        "additionalProperties": False,
+    }
+
+
+def _local_schema(questions: dict[str, dict]) -> dict[str, Any]:
+    """The strict JSON Schema the local judge must answer with, from `questions`. Mirrors
+    `judge_shim.schema_for` (validated end-to-end against Qwen3-4B on llama-server)."""
+    properties: dict[str, Any] = {}
+    for key, question in questions.items():
+        kind = question.get("type")
+        criteria = question.get("criteria")
+        if kind == "noul":
+            properties[key] = {
+                "type": "object",
+                "properties": {"noul": {"type": "number"}},
+                "required": ["noul"],
+                "additionalProperties": False,
+            }
+        elif kind == "score":
+            levels = criteria if isinstance(criteria, list) else []
+            properties[key] = _probabilities_schema([str(i) for i in range(len(levels))])
+        elif kind == "choice":
+            options = criteria if isinstance(criteria, dict) else {}
+            properties[key] = _probabilities_schema(list(options))
+        else:
+            raise ValueError(f"不认识的问题类型 {kind!r}（键 {key}）")
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def _local_prompt(state: dict[str, Any], questions: dict[str, dict]) -> str:
+    """The Chinese prompt the local judge is given, from `state` and `questions`. Mirrors
+    `judge_shim.prompt_for`."""
+    lines = ["对话状态：", json.dumps(state, ensure_ascii=False, indent=1), "", "需要你回答的问题："]
+    for key, question in questions.items():
+        kind = question.get("type")
+        criteria = question.get("criteria")
+        lines.append("")
+        lines.append(f"[{key}] {question.get('instructions', '')}")
+        if kind == "noul":
+            lines.append("  给一个 0 到 1 之间的数：越接近 1 越偏向「是」，越接近 0 越偏向「否」。")
+            if isinstance(criteria, dict):
+                for name, description in criteria.items():
+                    lines.append(f"  - {name}：{description}")
+        elif kind == "score":
+            levels = criteria if isinstance(criteria, list) else []
+            lines.append(f"  按 {len(levels)} 档评估，每档给一个 0 到 1 之间的概率，加起来接近 1。")
+            for index, description in enumerate(levels):
+                lines.append(f"  - 第 {index} 档：{description}")
+        elif kind == "choice":
+            options = criteria if isinstance(criteria, dict) else {}
+            lines.append("  每个选项给一个 0 到 1 之间的概率，加起来接近 1。")
+            for name, description in options.items():
+                lines.append(f"  - {name}：{description}")
+        else:
+            raise ValueError(f"不认识的问题类型 {kind!r}（键 {key}）")
+    lines.append("")
+    lines.append(f"只输出一个 JSON 对象，键是：{', '.join(questions)}。")
+    return "\n".join(lines)
+
+
 class JudgeModel(Protocol):
     async def ask(self, state: dict[str, Any], questions: dict[str, dict]) -> dict[str, Any]:
         """The answer to each of `questions` about `state`, by the question's key, all in
@@ -204,11 +293,16 @@ class JudgeModel(Protocol):
     async def aclose(self) -> None: ...
 
 
-JUDGE_TIMEOUT = httpx.Timeout(5, connect=3)
+def judge_timeout() -> httpx.Timeout:
+    """A client's timeout for the judge model: `JUDGE_TIMEOUT` seconds, with a connect
+    timeout no larger than it (and no larger than the old 3 s). Local judges need this
+    raised from the 5 s cloud default; see `deploy/local-ai/notes/05-代码插桩点.md`."""
+    seconds = judge_timeout_from_env()
+    return httpx.Timeout(seconds, connect=min(3.0, seconds))
 
 
 def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=JUDGE_TIMEOUT)
+    return httpx.AsyncClient(timeout=judge_timeout())
 
 
 def _reply(answers: Any, usage: Any, service: str, res: httpx.Response) -> JudgeReply:
@@ -413,14 +507,83 @@ def _refused(status: int, errors: Any) -> CloudflareRefused:
     return CloudflareRefused(f"Cloudflare Workers AI 返回 {status}: {said}", status, codes)
 
 
+class LocalJudge:
+    """A self-hosted OpenAI-compatible Chat Completions server as the judge model
+    (`deploy/local-ai/`). Jev speaks TypeSafe's System One protocol; a local llama-server
+    has only `/v1/chat/completions`, so the typed System One questions are translated
+    here into one strict-JSON-Schema chat request. This is the logic the validated
+    `judge_shim.py` used, now a first-class provider: no extra process to run."""
+
+    service = "本地判断模型"
+
+    def __init__(
+        self, model: str, base_url: str, api_key: str | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._url = base_url.rstrip("/") + "/chat/completions"
+        self._api_key = api_key or "local"  # llama-server does not check it, but a header is sent
+        self._model = model
+        self._client = client or _client()
+
+    async def ask(self, state: dict[str, Any], questions: dict[str, dict]) -> dict[str, Any]:
+        reply = await self.reply(state, questions)
+        bill("tokens", reply.input_tokens)
+        return reply.answers
+
+    async def reply(self, state: dict[str, Any], questions: dict[str, dict]) -> JudgeReply:
+        """As `ask`, with the prompt tokens the local server counted."""
+        try:
+            schema = _local_schema(questions)
+            prompt = _local_prompt(state, questions)
+        except ValueError as e:
+            raise JudgeError(f"{self.service}的提问无法转换：{e}") from e
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _LOCAL_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "judge", "schema": schema, "strict": True},
+            },
+            "temperature": 0,
+            "max_tokens": _LOCAL_MAX_TOKENS,
+        }
+        try:
+            res = await self._client.post(
+                self._url, json=body, headers={"Authorization": f"Bearer {self._api_key}"}
+            )
+        except httpx.HTTPError as e:
+            raise JudgeError(f"无法连接 {self.service}：{e!r}") from e
+        if res.status_code >= 400:
+            raise JudgeRefused(
+                f"{self.service} 返回 {res.status_code}: {res.text[:500]}", res.status_code, res.text
+            )
+        try:
+            payload = res.json()
+            content = payload["choices"][0]["message"]["content"]
+            answers = json.loads(content)
+            usage = payload.get("usage") or {}
+            tokens = usage.get("prompt_tokens")
+        except (ValueError, KeyError, TypeError, IndexError) as e:
+            raise JudgeError(f"{self.service} 的返回无法解析（{len(res.text)} 字）") from e
+        return _reply(answers, {"input_tokens": tokens}, self.service, res)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
 def open_judge(
     settings: JudgeSettings, client: httpx.AsyncClient | None = None
-) -> JevJudge | CloudflareJudge:
+) -> JevJudge | CloudflareJudge | LocalJudge:
     """The judge model `settings` choose."""
     if isinstance(settings, CloudflareJudgeSettings):
         return CloudflareJudge(settings.api_token, settings.account_id, settings.model, client)
     if isinstance(settings, BailianJudgeSettings):
         return BailianJudge(settings.api_key, settings.model, settings.base_url, client)
+    if isinstance(settings, LocalJudgeSettings):
+        return LocalJudge(settings.model, settings.base_url, settings.api_key, client)
     return JevJudge(settings.api_key, settings.model, settings.base_url, client)
 
 
@@ -441,7 +604,7 @@ async def check_judge(
     settings: JudgeSettings | None, client: httpx.AsyncClient | None = None
 ) -> None:
     """Tries Cloudflare's or Model Studio's credentials as the server starts (see their
-    `check`); Jev is not tried."""
+    `check`); Jev and the local judge are not tried."""
     if not isinstance(settings, CloudflareJudgeSettings | BailianJudgeSettings):
         return
     judge = open_judge(settings, client)

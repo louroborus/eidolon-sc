@@ -13,6 +13,9 @@
 .impeccable/
 skills-lock.json
 
+# IDE 的本机配置（PyCharm 的 workspace.xml、shelf 等由 .idea/.gitignore 二次忽略）
+.idea/
+
 # 浏览器调研产物
 .playwright-mcp/
 

@@ -21,7 +21,7 @@ from typing import Generic, Literal, Protocol, TypeVar
 from eidolon.config import (
     ChatModelSettings, JudgeSettings, LLMProtocol, LLMSettings, ProxySettings,
 )
-from eidolon.judge import JUDGE_TIMEOUT, JudgeModel, open_judge
+from eidolon.judge import judge_timeout, JudgeModel, open_judge
 from eidolon.llm import ChatLLM, ChatModels
 from eidolon.llm import listing
 from eidolon.llm.providers import LLM_TIMEOUT, open_chat_models, open_llm
@@ -68,7 +68,7 @@ class ProviderClients:
         return open_llm(settings, self._routes.client("memory_llm", LLM_TIMEOUT))
 
     def judge_model(self, settings: JudgeSettings) -> JudgeModel:
-        return open_judge(settings, self._routes.client("judge", JUDGE_TIMEOUT))
+        return open_judge(settings, self._routes.client("judge", judge_timeout()))
 
     async def list_models(
         self, service: Literal["chat_llm", "memory_llm"], protocol: LLMProtocol,

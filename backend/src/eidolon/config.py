@@ -227,9 +227,26 @@ DEFAULT_JEV_MODEL = "typesafe/jev-1.13"
 """Pinned: a new Jev changes which turns retrieve, so moving to one is a choice, checked
 in a real conversation."""
 
-JudgeProvider = Literal["jev", "cloudflare", "bailian"]
+DEFAULT_LOCAL_JUDGE_BASE_URL = "http://127.0.0.1:8094/v1"
+DEFAULT_LOCAL_JUDGE_MODEL = "local-judge"
+"""The local judge (`deploy/local-ai/`) is an OpenAI-compatible Chat Completions server:
+the model name must match a preset in `models.ini`, which llama-server routes by."""
+
+DEFAULT_JUDGE_TIMEOUT = 5.0
+"""A cloud judge answers in well under this; a local one needs more (see
+`JUDGE_TIMEOUT`)."""
+
+DEFAULT_RERANK_TIMEOUT = 3.0
+"""How long a reranking may take, matching `retry.TURN_TIMEOUT`: a cloud reranker
+answers in under a second, so a slow one is a failing one. Overridable because a local
+reranker given the same candidates takes seconds — 36 passages of a story's length took
+4.2 to 4.8 seconds on an RX 6750 XT — and would otherwise fail every turn needing them.
+See `RERANK_TIMEOUT`."""
+
+JudgeProvider = Literal["jev", "cloudflare", "bailian", "local"]
 """The services the judge model may be: Jev through a System One endpoint, Cloudflare's
-Clef on Workers AI, or Alibaba Cloud Model Studio's decision model."""
+Clef on Workers AI, Alibaba Cloud Model Studio's decision model, or a local OpenAI-
+compatible Chat Completions server (`deploy/local-ai/`)."""
 
 JUDGE_PROVIDERS: tuple[JudgeProvider, ...] = get_args(JudgeProvider)
 
@@ -596,6 +613,7 @@ class Settings:
                 "EIDOLON_OWN_LLM_REQUIRED no longer does anything: users need not bring their"
                 " own LLM, and only the limits hold them; delete it from .env"
             )
+        judge_timeout_from_env()  # a bad JUDGE_TIMEOUT stops the start, not the first turn
         chat_llm = LLMSettings.chat_from_env()
         return cls(
             database_path=database_path_from_env(),
@@ -965,6 +983,26 @@ class JevSettings:
         )
 
 
+@dataclass(frozen=True)
+class LocalJudgeSettings:
+    """A self-hosted OpenAI-compatible Chat Completions server as the judge model
+    (`deploy/local-ai/`). Unlike Jev, it is asked in plain chat completions with a strict
+    JSON Schema, so no translation shim is needed. No key is required, but a placeholder
+    keeps the HTTP client's `Authorization` header well formed."""
+
+    model: str = DEFAULT_LOCAL_JUDGE_MODEL
+    base_url: str = DEFAULT_LOCAL_JUDGE_BASE_URL
+    api_key: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "LocalJudgeSettings":
+        return cls(
+            model=os.environ.get("LOCAL_JUDGE_MODEL") or DEFAULT_LOCAL_JUDGE_MODEL,
+            base_url=(os.environ.get("LOCAL_JUDGE_BASE_URL") or DEFAULT_LOCAL_JUDGE_BASE_URL).rstrip("/"),
+            api_key=os.environ.get("LOCAL_JUDGE_API_KEY") or None,
+        )
+
+
 QWEATHER_FIELDS = ("host", "developer_id", "project_id", "key_id", "private_key")
 """What the deployer's QWeather account takes, all of them, or it is none."""
 
@@ -1137,6 +1175,23 @@ def _seconds(name: str, value: str) -> float:
     return seconds
 
 
+def judge_timeout_from_env() -> float:
+    """How long, in seconds, one request to the judge model may take (`JUDGE_TIMEOUT`).
+    A local judge is slower than a cloud one, so this is configurable; validated here so
+    a bad value stops the server at startup rather than at the first turn."""
+    value = (os.environ.get("JUDGE_TIMEOUT") or "").strip()
+    return _seconds("JUDGE_TIMEOUT", value) if value else DEFAULT_JUDGE_TIMEOUT
+
+
+def rerank_timeout_from_env() -> float:
+    """How long, in seconds, one reranking may take (`RERANK_TIMEOUT`). A local reranker
+    is slower than SiliconFlow (see `DEFAULT_RERANK_TIMEOUT`), so this is configurable;
+    validated here so a bad value stops the server at startup rather than at the first
+    turn that needs references."""
+    value = (os.environ.get("RERANK_TIMEOUT") or "").strip()
+    return _seconds("RERANK_TIMEOUT", value) if value else DEFAULT_RERANK_TIMEOUT
+
+
 @dataclass(frozen=True)
 class CloudflareJudgeSettings:
     """Cloudflare's Clef or Clef-flash on Workers AI, called directly with an API token
@@ -1195,14 +1250,16 @@ class BailianJudgeSettings:
         )
 
 
-JudgeSettings = JevSettings | CloudflareJudgeSettings | BailianJudgeSettings
+JudgeSettings = (
+    JevSettings | CloudflareJudgeSettings | BailianJudgeSettings | LocalJudgeSettings
+)
 """The judge model chosen, and how to reach it."""
 
 
 def judge_from_env(provider: str | None = None) -> JudgeSettings | None:
-    """The judge model `provider`, or else `JUDGE_PROVIDER`, chooses: Cloudflare's and
-    Model Studio's need their settings, and the `JEV_*` ones are then ignored; Jev, the
-    default, is off without its key."""
+    """The judge model `provider`, or else `JUDGE_PROVIDER`, chooses: Cloudflare's,
+    Model Studio's and the local server's need their settings, and the `JEV_*` ones are
+    then ignored; Jev, the default, is off without its key."""
     provider = provider or os.environ.get("JUDGE_PROVIDER") or "jev"
     if provider not in JUDGE_PROVIDERS:
         raise RuntimeError(
@@ -1212,6 +1269,8 @@ def judge_from_env(provider: str | None = None) -> JudgeSettings | None:
         return CloudflareJudgeSettings.from_env()
     if provider == "bailian":
         return BailianJudgeSettings.from_env()
+    if provider == "local":
+        return LocalJudgeSettings.from_env()
     return _jev_from_env()
 
 

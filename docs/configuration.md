@@ -13,7 +13,7 @@
 > | 语音通话 | `FISH_AUDIO_API_KEY`，加语音识别的 key：`SONIOX_API_KEY`（默认），或 `STT_PROVIDER=bailian` 加 `DASHSCOPE_API_KEY` |
 > | 朗读她的话 | `FISH_AUDIO_API_KEY` |
 > | 剧情库（同步或导入） | 向量化的 key：`SILICONFLOW_API_KEY`（默认），或 `EMBEDDING_PROVIDER=gemini` 加 `GEMINI_API_KEY` |
-> | 检索与记忆 | 向量化的 key、`SILICONFLOW_API_KEY`（重排），加判断模型：`JEV_API_KEY`（默认），或 `JUDGE_PROVIDER=cloudflare` 加 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，或 `JUDGE_PROVIDER=bailian` 加 `BAILIAN_JUDGE_API_KEY`、`BAILIAN_JUDGE_WORKSPACE_ID` |
+> | 检索与记忆 | 向量化的 key、`SILICONFLOW_API_KEY`（重排），加判断模型：`JEV_API_KEY`（默认），或 `JUDGE_PROVIDER=cloudflare` 加 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，或 `JUDGE_PROVIDER=bailian` 加 `BAILIAN_JUDGE_API_KEY`、`BAILIAN_JUDGE_WORKSPACE_ID`，或 `JUDGE_PROVIDER=local`（本机模型，不用 key） |
 > | 好感度和礼物 | 判断模型（开关默认打开） |
 > | 照片 | 判断模型，加生图的 key：`NOVELAI_API_KEY` |
 > | 日程 | 无（开关默认打开） |
@@ -324,16 +324,17 @@ docker compose exec backend eidolon reembed
 
 判断模型每个回合判断要不要检索、检索什么，打开了[好感度](#好感度和礼物)时还判断这句话让好感度怎样变化；通话中还判断每段回复的情绪。用 `JUDGE_PROVIDER` 选一家，一家出错时不会换用另一家。
 
-| | Jev（默认） | Clef-flash | Clef | 百炼决策模型 |
-|---|---|---|---|---|
-| 设置 | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | 再加 `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` |
-| 价格（每百万输入 token，输出不收费） | $0.042 | $0.09 | $0.24 | 预览版限时免费 |
-| 每天的免费额度 | 无 | 约 2,000 次判断（好感度开着时约 860 次） | 约 750 次判断（好感度开着时约 320 次） | 未公布 |
+| | Jev（默认） | Clef-flash | Clef | 百炼决策模型 | 本地模型 |
+|---|---|---|---|---|---|
+| 设置 | `JEV_API_KEY` | `JUDGE_PROVIDER=cloudflare` | 再加 `CLOUDFLARE_JUDGE_MODEL=clef` | `JUDGE_PROVIDER=bailian` | `JUDGE_PROVIDER=local` |
+| 价格（每百万输入 token，输出不收费） | $0.042 | $0.09 | $0.24 | 预览版限时免费 | 只花本机的电 |
+| 每天的免费额度 | 无 | 约 2,000 次判断（好感度开着时约 860 次） | 约 750 次判断（好感度开着时约 320 次） | 未公布 | 无限制 |
 
 - **Jev**：默认经 [OpenRouter](https://openrouter.ai/typesafe/jev-1.13) 调用，`JEV_API_KEY` 填 OpenRouter 的 key。也可以把 `JEV_BASE_URL` 换成 Vercel AI Gateway 或 TypeSafe 直连，写法见 `.env.example`。
 - **Clef 和 Clef-flash**：Cloudflare 的判断模型，直连 Workers AI。Clef 的检索判断更准（在仓库的评测集上 94% 对 87%），但贵将近 3 倍。公开部署应开 Workers Paid：免费额度用完后，当天的判断都按失败处理。凭证怎么取见 `.env.example`。
 - **百炼决策模型**：阿里云百炼的 `decision-model-preview`，经业务空间的专属地址调用，延迟最低。检索判断和 Clef-flash 相当（89%），但好感度的判断偏高、分不清聊照片和要照片，所以只适合关了[好感度](#好感度和礼物)的部署；开着好感度时用 Jev。业务空间 ID 和 key 怎么取见 `.env.example`。
-- **阈值**：判断的阈值按模型写在代码里，用 `eidolon eval judge` 在仓库的评测集上定出（见 [`deploy.md`](deploy.md) 的「校准判断模型阈值」）。
+- **本地模型**：本机跑的 OpenAI 兼容 Chat Completions 服务（如 llama-server），用 `LOCAL_JUDGE_BASE_URL`、`LOCAL_JUDGE_MODEL` 指过去，不用 API key；单机就能把检索、好感度和情绪判断都留在本地。它比云端慢，用 `JUDGE_TIMEOUT` 放宽单次判断的超时（默认 5 秒，本地 4B 模型建议 30 秒左右）。模型名要和服务的预设一致，完整起法与实测数据见 [`deploy/local-ai/README.md`](../deploy/local-ai/README.md)。语音合成和语音识别仍需上云，见该文档的「边界」。
+- **阈值**：判断的阈值按模型写在代码里，用 `eidolon eval judge` 在仓库的评测集上定出（见 [`deploy.md`](deploy.md) 的「校准判断模型阈值」）。本地模型没有自己的阈值，按 Jev 族处理，启动时会提示。
 
 ```mermaid
 flowchart LR
@@ -345,7 +346,7 @@ flowchart LR
 ```
 
 - **不检索**：寒暄闲聊不检索，不增加延迟。判断模型出错时照常检索。
-- **需要资料**：同时检索她出场过的剧情、她的角色资料和所有角色共享的作品资料（每首歌、每张唱片、每个演出日一条），用 Qwen3-Reranker（`RERANK_MODEL`）重排，取相关程度够高的最多 5 条放进提示词。阈值按重排模型校准过，也可以用 `RERANK_MIN_RELEVANCE`、`RERANK_MEMORY_MIN_RELEVANCE` 手动设置。
+- **需要资料**：同时检索她出场过的剧情、她的角色资料和所有角色共享的作品资料（每首歌、每张唱片、每个演出日一条），用 Qwen3-Reranker（`RERANK_MODEL`）重排，取相关程度够高的最多 5 条放进提示词。阈值按重排模型校准过，也可以用 `RERANK_MIN_RELEVANCE`、`RERANK_MEMORY_MIN_RELEVANCE` 手动设置。重排默认给 3 秒（`RERANK_TIMEOUT`，和一次对话回合的预算一致）；本机跑重排时，36 条剧情长度的候选在这类显卡上要 4 到 5 秒，用 `RERANK_TIMEOUT` 放宽到 10 秒左右，见 [`deploy/local-ai/README.md`](../deploy/local-ai/README.md)。
 - **回顾剧情**：问「那次……是怎么回事」时，直接用这句话检索剧情，同时查相关的演出和唱片。剧情库里没有这段经过时，提示她这不等于没发生过，不编造也不否认。其他回合里，对话模型也可以自己调用 `recall_story` 工具，一句话最多调用一轮。
 - **资料文件**：角色资料是 `facts` 指向的 Markdown，每个标题下是一条；作品资料由 `characters/world.json` 生成。两者都在第一次检索时向量化，之后只重算改动过的条目，改完重启后端即可。
 

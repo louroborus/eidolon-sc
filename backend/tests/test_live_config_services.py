@@ -568,7 +568,7 @@ async def test_a_saved_judge_model_judges_the_next_turn_while_a_call_keeps_its_o
     shown = saved.json()["judge"]
     assert shown["status"] == "overridden"
     assert shown["effective"] == {k: v for k, v in CLOUDFLARE.items() if k != "api_key"} | {
-        "api_key_last4": "2222", "workspace_id": None, "region": None
+        "api_key_last4": "2222", "workspace_id": None, "region": None, "base_url": None
     }
 
 
@@ -621,7 +621,7 @@ async def test_bailian_saved_judges_the_next_turn_at_its_workspace_in_beijing_un
     ]
     shown = saved.json()["judge"]
     assert shown["effective"] == {k: v for k, v in BAILIAN.items() if k != "api_key"} | {
-        "api_key_last4": "3333", "account_id": None, "region": "beijing"
+        "api_key_last4": "3333", "account_id": None, "region": "beijing", "base_url": None
     }
 
 
@@ -636,7 +636,7 @@ async def test_bailian_in_env_is_shown_as_it_is(
     assert shown == {
         "provider": "bailian", "api_key_last4": "3333", "model": "decision-model-preview",
         "account_id": None, "workspace_id": "llm-ws1", "region": "singapore",
-        "emotion_timeout": shown["emotion_timeout"],
+        "base_url": None, "emotion_timeout": shown["emotion_timeout"],
     }
 
 

@@ -1,6 +1,7 @@
 """The retrieval services' own protocols: SiliconFlow's rerank endpoint, and Jev through
 TypeSafe's System One endpoint (OpenRouter's by default), and how Jev is configured."""
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -8,9 +9,9 @@ import httpx
 import pytest
 
 from eidolon.characters import Character
-from eidolon.config import JevSettings, Settings
+from eidolon.config import JevSettings, Settings, rerank_timeout_from_env
 from eidolon.producer import Birthday
-from eidolon.rerank import RerankError, SiliconFlowReranker
+from eidolon.rerank import RerankError, SiliconFlowReranker, rerank_timeout
 from eidolon.judge import JevJudge, JudgeError
 from eidolon.retrieval import ModelRetrievalJudge
 from eidolon.store import Message
@@ -109,6 +110,51 @@ async def test_a_rerank_failing_again_or_refused_is_reported(answers: list[Answe
     with pytest.raises(RerankError, match=error):
         await scripted_reranker(answers).rerank("q", ["a"], top_n=1)
     assert len(answers) == 1  # never asked a third time, nor a second when refused
+
+
+@pytest.fixture
+def rerank_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    monkeypatch.delenv("RERANK_TIMEOUT", raising=False)
+    return monkeypatch
+
+
+def test_rerank_timeout_defaults_to_three_seconds(rerank_env: pytest.MonkeyPatch):
+    assert rerank_timeout_from_env() == 3.0
+    assert rerank_timeout() == 3.0
+
+
+def test_rerank_timeout_is_configurable(rerank_env: pytest.MonkeyPatch):
+    rerank_env.setenv("RERANK_TIMEOUT", "10")
+
+    assert rerank_timeout_from_env() == 10.0
+    assert rerank_timeout() == 10.0
+
+
+def test_a_bad_rerank_timeout_stops_the_start(rerank_env: pytest.MonkeyPatch):
+    for bad in ("0", "-1", "abc"):
+        rerank_env.setenv("RERANK_TIMEOUT", bad)
+        with pytest.raises(RuntimeError, match="环境变量 RERANK_TIMEOUT 需要是大于 0 的秒数"):
+            rerank_timeout_from_env()
+
+
+def test_a_blank_rerank_timeout_uses_the_default(rerank_env: pytest.MonkeyPatch):
+    rerank_env.setenv("RERANK_TIMEOUT", "   ")
+
+    assert rerank_timeout_from_env() == 3.0
+
+
+async def test_the_reranker_uses_the_configured_timeout(rerank_env: pytest.MonkeyPatch):
+    rerank_env.setenv("RERANK_TIMEOUT", "0.05")
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.3)
+        return httpx.Response(200, json={"results": [{"index": 0, "relevance_score": 0.9}]})
+
+    slow_client = httpx.AsyncClient(transport=httpx.MockTransport(slow))
+    reranker = SiliconFlowReranker("k", "m", "http://sf.test/v1", slow_client)
+
+    with pytest.raises(RerankError, match="没有回应"):
+        await reranker.rerank("q", ["a"], top_n=1)
 
 
 MANO = Character("mano", "櫻木真乃", "", "voice", "sheet", None, "#ffbad6", Birthday(4, 25), 16)
